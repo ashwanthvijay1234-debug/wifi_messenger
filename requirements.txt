@@ -1,0 +1,8 @@
+# Wi-Fi Walkie-Talkie Requirements
+# Install with: pip install -r requirements.txt
+
+# Core dependency for encrypted messaging (Secret Mode)
+cryptography>=41.0.0
+
+# Optional: For better Windows terminal support
+# windows-curses>=2.3.0  # Uncomment if needed on Windows
