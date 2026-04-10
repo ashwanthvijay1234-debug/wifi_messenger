@@ -23,7 +23,7 @@ irm https://raw.githubusercontent.com/ashwanthvijay1234-debug/wifi_walkie/main/i
 
 For Windows CMD / Linux / Mac:
 ```bash
-curl -sS https://raw.githubusercontent.com/ashwanthvijay1234-debug/wifi_walkie/main/install.sh -o /tmp/w.sh && chmod +x /tmp/w.sh && /tmp/w.sh && python3 wifi_walkie.py
+curl -sS https://raw.githubusercontent.com/ashwanthvijay1234-debug/wifi_walkie/main/install.bat -o /tmp/w.sh && chmod +x /tmp/w.sh && /tmp/w.sh && python3 wifi_walkie.py
 ```
 
 This magical one-liner will:
