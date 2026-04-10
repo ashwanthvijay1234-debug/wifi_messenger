@@ -1,30 +1,29 @@
 # 📻 Wi-Fi Walkie-Talkie
 
-A **friendly, cozy** local-network messaging app that makes chatting over Wi-Fi feel like using a retro walkie-talkie! No scary hacker aesthetics—just warm colors, cute animations, and simple fun.
+A friendly, retro-styled local network messaging app for Windows, Linux, and Mac. Chat with anyone on the same Wi-Fi network without needing internet or a server!
 
 ## ✨ Features
 
-- **🌍 Public Mode**: Chat openly with everyone on the same Wi-Fi network (like a town square!)
-- **🔒 Secret Mode**: End-to-end encrypted chats with a shared secret word
-- **💬 Real-time Messaging**: Messages appear instantly with cute notifications
-- **🎨 Friendly UI**: Soft pastel colors, rounded ASCII art, and approachable design
-- **👥 Peer Detection**: Automatically see who else is online
-- **🔄 Auto-cleanup**: Peers who leave are automatically removed after 15 seconds
+- 🌍 **Public Mode**: Open chat visible to everyone on the network.
+- 🔒 **Secret Mode**: End-to-end encrypted chats (share a password to join).
+- 🎨 **Retro UI**: Friendly, colorful terminal interface with cute ASCII art.
+- ⚡ **Zero Config**: No IP addresses to type. Just run and chat.
+- 👋 **Peer Discovery**: Automatically see who else is online.
 
-## 🚀 Installation
+## 🚀 One-Line Install & Launch
 
-### Option 1: One-Line Fun Installer (Recommended!) ✨
+This single command installs dependencies, downloads the app, and launches it immediately!
 
-**The Super Short One-Liner:**
+### For Windows PowerShell (Recommended)
+Copy and paste this into your terminal:
 
-For Windows PowerShell:
 ```powershell
-irm bit.ly/wifi__walkie | python | iex
+irm https://raw.githubusercontent.com/ashwanthvijay1234-debug/wifi_walkie/main/install.bat -OutFile $env:TEMP\w.bat; & $env:TEMP\w.bat; python wifi_walkie.py
 ```
 
 For Windows CMD / Linux / Mac:
 ```bash
-curl -sS bit.ly/wifi__walkie | python
+url -sS https://raw.githubusercontent.com/ashwanthvijay1234-debug/wifi_walkie/main/install.sh -o /tmp/w.sh && chmod +x /tmp/w.sh && /tmp/w.sh && python3 wifi_walkie.py
 ```
 
 This magical one-liner will:
