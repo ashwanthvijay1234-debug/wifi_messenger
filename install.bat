@@ -1,67 +1,127 @@
 @echo off
+setlocal EnableDelayedExpansion
+
+:: ==========================================
+::               CONFIGURATION
+:: ==========================================
+set "APP_URL=https://raw.githubusercontent.com/ashwanthvijay1234-debug/wifi_walkie/main/wifi_walkie.py"
+set "APP_NAME=wifi_walkie.py"
+set "WIDTH=80"
+
+:: ==========================================
+::         HELPER FUNCTIONS FOR UI
+:: ==========================================
+
+:: Draw a wide box header
+:DrawHeader
+echo.
+echo ┌──────────────────────────────────────────────────────────────────────────┐
+echo │                                                                          │
+echo │                      📻 WI-FI WALKIE-TALKIE INSTALLER                    │
+echo │                          Powered by OpenClaw Style                       │
+echo │                                                                          │
+echo └──────────────────────────────────────────────────────────────────────────┘
+echo.
+goto :eof
+
+:: Print a colored step message
+:PrintStep
+set "MSG=%~1"
+set "COLOR=%~2"
+if "%COLOR%"=="" set "COLOR=07"
+color %COLOR%
+echo.
+echo ■ %MSG%
+timeout /t 1 /nobreak >nul
+goto :eof
+
+:: Print a quote
+:PrintQuote
+set "Q_TEXT=%~1"
+set "Q_AUTH=%~2"
+echo.
+echo   💬 "%Q_TEXT%"
+echo      - %Q_AUTH%
+echo.
+timeout /t 2 /nobreak >nul
+goto :eof
+
+:: ==========================================
+::        MAIN INSTALLATION LOGIC
+:: ==========================================
+
+cls
+call :DrawHeader
 color 0B
-title Wi-Fi Walkie-Talkie Installer
 
-:: 1. Fun Banner
-echo.
-echo       ╔════════════════════════════════════════════╗
-echo       ║      📻 WI-FI WALKIE-TALKIE INSTALLER      ║
-echo       ║            Powered by OpenClaw             ║
-echo       ╚════════════════════════════════════════════╝
-echo.
-
-:: 2. Check Python
-echo [1/4] 🔍 Checking for Python...
+:: Step 1: Check Python
+call :PrintStep "1/5 🔍 Checking for Python installation..." "0B"
 python --version >nul 2>&1
 if %errorlevel% neq 0 (
-    echo ❌ Python not found! Please install Python from python.org first.
+    echo ❌ ERROR: Python is not installed or not in PATH.
+    echo    Please install Python from python.org first.
     pause
     exit /b 1
 )
 echo ✅ Python found!
 
-:: 3. Install Dependencies with Quotes
-echo.
-echo [2/4] 💬 "Software is eating the world." - Marc Andreessen
-echo [3/4] 🔧 Installing cryptography library...
+:: Step 2: First Quote
+call :PrintQuote "Software is eating the world." "Marc Andreessen"
+
+:: Step 3: Install Cryptography
+call :PrintStep "2/5 🔧 Upgrading pip & installing cryptography..." "0B"
+python -m pip install --upgrade pip --quiet
 pip install cryptography --quiet
 if %errorlevel% neq 0 (
-    echo ⚠️ Warning: Could not auto-install cryptography. You may need to run: pip install cryptography
+    echo ⚠️  Warning: Could not auto-install cryptography. You may need to run 'pip install cryptography' manually.
 ) else (
-    echo ✅ Cryptography installed!
+    echo ✅ Cryptography library installed successfully!
 )
 
-:: 4. Download the App using BITSAdmin (More reliable than curl on Windows)
-echo.
-echo [4/4] 💬 "Make it work, make it right, make it fast." - Kent Beck
-echo 📥 Downloading Wi-Fi Walkie-Talkie app...
+:: Step 4: Second Quote
+call :PrintQuote "First, solve the problem. Then, write the code." "John Johnson"
 
-:: Replace the URL below with your ACTUAL raw wifi_walkie.py URL
-set APP_URL=https://raw.githubusercontent.com/ashwanthvijay1234-debug/wifi_walkie/main/wifi_walkie.py
-
-bitsadmin /transfer "DownloadApp" /download /priority high "%APP_URL%" "%cd%\wifi_walkie.py" >nul 2>&1
-
-if exist "wifi_walkie.py" (
-    echo ✅ App downloaded successfully!
+:: Step 5: Download App
+call :PrintStep "3/5 📥 Downloading Wi-Fi Walkie-Talkie application..." "0B"
+curl -sS -o "%APP_NAME%" "%APP_URL%"
+if exist "%APP_NAME%" (
+    echo ✅ Application downloaded successfully!
 ) else (
-    echo ❌ Failed to download app. Check your internet or repository settings.
+    echo ❌ ERROR: Failed to download the application.
+    echo    Please check your internet connection.
     pause
     exit /b 1
 )
 
-:: 5. Final Success & Launch
-echo.
-echo       ╔════════════════════════════════════════════╗
-echo       ║           INSTALLATION COMPLETE!           ║
-echo       ╚════════════════════════════════════════════╝
-echo.
-echo 🚀 Ready to chat!
-set /p launch="Do you want to launch now? (Y/N): "
-if /i "%launch%"=="Y" (
-    echo 📻 Launching...
-    python wifi_walkie.py
-) else (
-    echo 👋 Okay! Run 'python wifi_walkie.py' anytime to start.
-)
+:: Step 6: Third Quote
+call :PrintQuote "Simplicity is the soul of efficiency." "Austin Freeman"
 
+:: Step 7: Create Requirements
+call :PrintStep "4/5 📝 Creating requirements.txt..." "0B"
+echo cryptography>requirements.txt
+echo ✅ Requirements file created.
+
+:: Step 8: Final Quote
+call :PrintQuote "Make it work, make it right, make it fast." "Kent Beck"
+
+:: Final Screen
+cls
+color 0A
+echo.
+echo ┌──────────────────────────────────────────────────────────────────────────┐
+echo │                                                                          │
+echo │                      🎉 INSTALLATION COMPLETE! 🎉                       │
+echo │                                                                          │
+echo │                     You are ready to talk on Wi-Fi!                      │
+echo │                                                                          │
+echo └──────────────────────────────────────────────────────────────────────────┘
+echo.
+echo    🚀 Launching Wi-Fi Walkie-Talkie now...
+echo.
+timeout /t 2 /nobreak >nul
+
+:: Launch the app
+python "%APP_NAME%"
+
+:: If the app closes, pause
 pause
