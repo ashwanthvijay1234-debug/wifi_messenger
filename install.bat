@@ -3,10 +3,14 @@
 chcp 65001 >nul
 setlocal EnableDelayedExpansion
 
-:: Ensure we are in a writable directory (User's home or temp)
-set "TARGET_DIR=%USERPROFILE%\WiFiWalkie"
-if not exist "%TARGET_DIR%" mkdir "%TARGET_DIR%"
-cd /d "%TARGET_DIR%"
+:: Set directory to where the script is running, or user home if in system32
+set "RUN_DIR=%cd%"
+echo %RUN_DIR% | findstr /i /c:"system32" >nul
+if %errorlevel% equ 0 (
+    set "RUN_DIR=%USERPROFILE%\WiFiWalkie"
+    if not exist "!RUN_DIR!" mkdir "!RUN_DIR!"
+)
+cd /d "!RUN_DIR!"
 
 set "APP_URL=https://raw.githubusercontent.com/ashwanthvijay1234-debug/wifi_walkie/main/netmsg.py"
 set "CLASSIC_URL=https://raw.githubusercontent.com/ashwanthvijay1234-debug/wifi_walkie/main/wifi_walkie.py"
@@ -21,7 +25,7 @@ echo    │                 Powered by OpenClaw                │
 echo    │                                                    │
 echo    ╰────────────────────────────────────────────────────╯
 echo.
-echo    Installing to: %TARGET_DIR%
+echo    Working Directory: !RUN_DIR!
 echo.
 goto :eof
 
@@ -56,11 +60,12 @@ if %errorlevel% neq 0 (
 
 :: Step 3: Download/Update Files
 call :PrintStep "Downloading latest version..."
-curl -sS -o "netmsg.py" "%APP_URL%"
-curl -sS -o "wifi_walkie.py" "%CLASSIC_URL%"
+curl -sS -L -o "netmsg.py" "%APP_URL%"
+curl -sS -L -o "wifi_walkie.py" "%CLASSIC_URL%"
 
 if not exist "netmsg.py" (
-    echo   [ X ] ERROR: Failed to download netmsg.py
+    echo   [ X ] ERROR: Failed to download netmsg.py to !RUN_DIR!
+    echo         Please check your internet connection.
     pause
     exit /b 1
 )
@@ -83,13 +88,19 @@ set /p choice="Choice [1]: "
 if "%choice%"=="" set choice=1
 
 if "%choice%"=="1" (
-    echo   [ ^> ] Launching NetMsg...
-    timeout /t 1 /nobreak >nul
-    python netmsg.py
+    if exist "netmsg.py" (
+        echo   [ ^> ] Launching NetMsg...
+        python netmsg.py
+    ) else (
+        echo   [ X ] Error: netmsg.py not found in !RUN_DIR!
+    )
 ) else (
-    echo   [ ^> ] Launching Wi-Fi Walkie Classic...
-    timeout /t 1 /nobreak >nul
-    python wifi_walkie.py
+    if exist "wifi_walkie.py" (
+        echo   [ ^> ] Launching Wi-Fi Walkie Classic...
+        python wifi_walkie.py
+    ) else (
+        echo   [ X ] Error: wifi_walkie.py not found in !RUN_DIR!
+    )
 )
 
 pause
