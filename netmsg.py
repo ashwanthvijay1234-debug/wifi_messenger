@@ -8,6 +8,7 @@ Features:
 - Open Mode (plain text) and E2EE Mode (encrypted with shared passphrase)
 - ANSI color-coded UI with ASCII Wi-Fi logo
 - Cross-platform compatible (Windows/Linux/Mac)
+- JSON-based protocol for robust communication
 
 Dependencies:
     pip install cryptography windows-curses (for Windows)
@@ -19,15 +20,17 @@ import time
 import os
 import sys
 import hashlib
+import json
+import logging
 from datetime import datetime
-from typing import Optional, List, Tuple
+from typing import Optional, List, Tuple, Dict, Any
 
 # Try to import cryptography library
 try:
     from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
     from cryptography.hazmat.primitives import hashes
     from cryptography.hazmat.backends import default_backend
-    from cryptography.fernet import Fernet
+    from cryptography.fernet import Fernet, InvalidToken
     import base64
     CRYPTO_AVAILABLE = True
 except ImportError:
@@ -38,16 +41,25 @@ except ImportError:
 # ============================================================================
 
 UDP_PORT = 50050
-BROADCAST_ADDRESS = '<broadcast>'
-BUFFER_SIZE = 4096
+BROADCAST_ADDRESS = '255.255.255.255'
+BUFFER_SIZE = 8192  # Increased for JSON and encryption overhead
 DISCOVERY_INTERVAL = 5  # seconds between presence broadcasts
 PEER_TIMEOUT = 15  # seconds before a peer is considered offline
+
+# Setup basic logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[logging.FileHandler("netmsg.log")]
+)
+logger = logging.getLogger(__name__)
 
 # ANSI Color Codes
 class Colors:
     RESET = '\033[0m'
     BOLD = '\033[1m'
     DIM = '\033[2m'
+    BLINK = '\033[5m'
     
     # Foreground colors
     BLACK = '\033[30m'
@@ -107,7 +119,7 @@ class CryptoHelper:
     def __init__(self, passphrase: str):
         """Initialize crypto helper with a passphrase to derive the key."""
         self.passphrase = passphrase.encode()
-        self.salt = b'netmsg_salt_v1'  # Fixed salt for simplicity (in production, use random)
+        self.salt = b'netmsg_salt_v2'  # Versioned salt
         self.key = self._derive_key()
         self.fernet = Fernet(self.key)
     
@@ -132,17 +144,20 @@ class CryptoHelper:
             encrypted = self.fernet.encrypt(message.encode())
             return encrypted.decode()
         except Exception as e:
-            print(f"{Colors.RED}Encryption error: {e}{Colors.RESET}")
+            logger.error(f"Encryption error: {e}")
             return message
     
-    def decrypt(self, encrypted_message: str) -> str:
+    def decrypt(self, encrypted_message: str) -> Optional[str]:
         """Decrypt a base64-encoded message."""
         try:
             decrypted = self.fernet.decrypt(encrypted_message.encode())
             return decrypted.decode()
-        except Exception:
-            # Return as-is if decryption fails (might be unencrypted or wrong key)
-            return encrypted_message
+        except InvalidToken:
+            logger.warning("Decryption failed: Invalid token (wrong key?)")
+            return None
+        except Exception as e:
+            logger.error(f"Decryption error: {e}")
+            return None
 
 # ============================================================================
 # PEER MANAGEMENT
@@ -166,7 +181,7 @@ class PeerManager:
     """Manages the list of known peers on the network."""
     
     def __init__(self):
-        self.peers: dict[str, Peer] = {}
+        self.peers: Dict[str, Peer] = {}
         self.lock = threading.Lock()
     
     def add_or_update_peer(self, username: str, address: Tuple[str, int]):
@@ -179,18 +194,30 @@ class PeerManager:
                     self.peers[key].username = username
             else:
                 self.peers[key] = Peer(username, address)
+                logger.info(f"New peer discovered: {username} at {address}")
+    
+    def remove_peer(self, address: Tuple[str, int]):
+        """Explicitly remove a peer."""
+        with self.lock:
+            key = f"{address[0]}:{address[1]}"
+            if key in self.peers:
+                peer = self.peers.pop(key)
+                logger.info(f"Peer left: {peer.username} at {address}")
     
     def get_active_peers(self) -> List[Peer]:
         """Get list of currently active peers."""
         with self.lock:
-            return [p for p in self.peers.values() if p.is_alive()]
+            current_time = time.time()
+            return [p for p in self.peers.values() if (current_time - p.last_seen) < PEER_TIMEOUT]
     
     def remove_stale_peers(self):
         """Remove peers that haven't been seen recently."""
         with self.lock:
-            stale_keys = [k for k, p in self.peers.items() if not p.is_alive()]
+            current_time = time.time()
+            stale_keys = [k for k, p in self.peers.items() if (current_time - p.last_seen) >= PEER_TIMEOUT]
             for key in stale_keys:
-                del self.peers[key]
+                peer = self.peers.pop(key)
+                logger.info(f"Peer timed out: {peer.username} at {peer.address}")
     
     def get_peer_count(self) -> int:
         """Get count of active peers."""
@@ -201,7 +228,7 @@ class PeerManager:
 # ============================================================================
 
 class NetworkHandler:
-    """Handles UDP broadcasting and message receiving."""
+    """Handles UDP broadcasting and message receiving with JSON protocol."""
     
     def __init__(self, username: str, mode: str, crypto_helper: Optional[CryptoHelper] = None):
         self.username = username
@@ -210,9 +237,10 @@ class NetworkHandler:
         self.peer_manager = PeerManager()
         self.socket = None
         self.running = False
-        self.messages: List[Tuple[float, str, str]] = []  # (timestamp, sender, message)
+        self.messages: List[Dict[str, Any]] = []  # timestamp, sender, content
         self.messages_lock = threading.Lock()
-        self.system_messages: List[Tuple[float, str]] = []  # (timestamp, message)
+        self.system_messages: List[Dict[str, Any]] = []  # timestamp, content
+        self.system_messages_lock = threading.Lock()
     
     def start(self):
         """Start the network handler threads."""
@@ -220,144 +248,183 @@ class NetworkHandler:
         self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
         self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         
-        # Bind to all interfaces
         try:
             self.socket.bind(('0.0.0.0', UDP_PORT))
         except OSError as e:
+            logger.critical(f"Failed to bind to port {UDP_PORT}: {e}")
             print(f"{Colors.RED}Failed to bind to port {UDP_PORT}: {e}{Colors.RESET}")
-            print(f"{Colors.YELLOW}Make sure no other instance is running on this port.{Colors.RESET}")
             sys.exit(1)
         
-        self.socket.settimeout(1.0)  # Timeout for recvfrom
+        self.socket.settimeout(1.0)
         self.running = True
         
-        # Start receiver thread
         self.receiver_thread = threading.Thread(target=self._receive_loop, daemon=True)
         self.receiver_thread.start()
         
-        # Start presence broadcaster thread
         self.broadcast_thread = threading.Thread(target=self._broadcast_presence_loop, daemon=True)
         self.broadcast_thread.start()
         
-        # Add system message
+        self.send_presence("join")
         self.add_system_message(f"Network started on port {UDP_PORT}")
         self.add_system_message(f"Mode: {self.mode.upper()}")
     
     def stop(self):
-        """Stop the network handler."""
-        self.running = False
-        if self.socket:
-            self.socket.close()
-        self.add_system_message("Network stopped")
+        """Stop the network handler gracefully."""
+        if self.running:
+            self.send_presence("leave")
+            self.running = False
+            time.sleep(0.5)  # Allow "leave" message to be sent
+            if self.socket:
+                self.socket.close()
+            logger.info("Network stopped")
     
     def _receive_loop(self):
-        """Continuously listen for incoming messages."""
+        """Continuously listen for incoming JSON messages."""
         while self.running:
             try:
                 data, addr = self.socket.recvfrom(BUFFER_SIZE)
-                message = data.decode('utf-8', errors='ignore')
-                self._process_incoming_message(message, addr)
+                raw_message = data.decode('utf-8', errors='ignore')
+                
+                try:
+                    payload = json.loads(raw_message)
+                    self._process_payload(payload, addr)
+                except json.JSONDecodeError:
+                    # Attempt decryption if in E2EE mode and JSON decode fails
+                    if self.mode == 'e2ee' and self.crypto_helper:
+                        decrypted = self.crypto_helper.decrypt(raw_message)
+                        if decrypted:
+                            try:
+                                payload = json.loads(decrypted)
+                                self._process_payload(payload, addr)
+                            except json.JSONDecodeError:
+                                logger.warning(f"Failed to decode decrypted JSON from {addr}")
+                    else:
+                        logger.debug(f"Received non-JSON message from {addr}")
             except socket.timeout:
+                # Periodic cleanup while waiting
+                self.peer_manager.remove_stale_peers()
                 continue
             except Exception as e:
                 if self.running:
-                    self.add_system_message(f"{Colors.RED}Receive error: {e}{Colors.RESET}")
+                    logger.error(f"Receive error: {e}")
                 break
-        
-        # Clean up stale peers periodically
-        self.peer_manager.remove_stale_peers()
     
-    def _process_incoming_message(self, message: str, addr: Tuple[str, int]):
-        """Process an incoming message."""
-        if not message.startswith(('MSG:', 'PRESENCE:')):
+    def _process_payload(self, payload: Dict[str, Any], addr: Tuple[str, int]):
+        """Process a decoded message payload."""
+        msg_type = payload.get("type")
+        sender = payload.get("user")
+        content = payload.get("content")
+        
+        if not msg_type or not sender:
             return
+
+        if msg_type == "presence":
+            action = content
+            if action == "join":
+                self.peer_manager.add_or_update_peer(sender, addr)
+                self.add_system_message(f"👋 {sender} joined the network")
+            elif action == "leave":
+                self.peer_manager.remove_peer(addr)
+                self.add_system_message(f"👋 {sender} left the network")
+            elif action == "online":
+                self.peer_manager.add_or_update_peer(sender, addr)
         
-        parts = message.split(':', 2)
-        if len(parts) < 3:
-            return
-        
-        msg_type = parts[0]
-        sender = parts[1]
-        content = parts[2]
-        
-        if msg_type == 'PRESENCE:':
-            # Peer presence announcement
+        elif msg_type == "chat":
             self.peer_manager.add_or_update_peer(sender, addr)
-            # Don't show every presence as a message to reduce noise
-        elif msg_type == 'MSG:':
-            # Actual chat message
-            self.peer_manager.add_or_update_peer(sender, addr)
-            
-            # Decrypt if in E2EE mode
-            if self.mode == 'e2ee' and self.crypto_helper:
-                try:
-                    content = self.crypto_helper.decrypt(content)
-                except Exception:
-                    content = f"[Unable to decrypt: {content[:20]}...]"
-            
+            # Decrypt content if it was encrypted (handled during initial receive if E2EE)
+            # But if we received it as open, and we are in E2EE, we might still want to see it?
+            # For simplicity, we assume consistent modes.
             self.add_message(sender, content)
-    
+
+    def send_presence(self, action: str):
+        """Send a presence announcement."""
+        payload = {
+            "type": "presence",
+            "user": self.username,
+            "content": action,
+            "ts": time.time()
+        }
+        self._send_payload(payload)
+
     def _broadcast_presence_loop(self):
         """Periodically broadcast user presence."""
         while self.running:
             try:
-                presence_msg = f"PRESENCE:{self.username}:online"
-                self.socket.sendto(presence_msg.encode(), (BROADCAST_ADDRESS, UDP_PORT))
+                self.send_presence("online")
             except Exception as e:
-                if self.running:
-                    self.add_system_message(f"{Colors.RED}Broadcast error: {e}{Colors.RESET}")
+                logger.error(f"Broadcast error: {e}")
             
             time.sleep(DISCOVERY_INTERVAL)
     
-    def send_message(self, message: str):
-        """Send a message to all peers on the network."""
-        if not message.strip():
+    def send_chat_message(self, text: str):
+        """Send a chat message."""
+        if not text.strip():
             return
         
-        # Encrypt if in E2EE mode
-        if self.mode == 'e2ee' and self.crypto_helper:
-            message = self.crypto_helper.encrypt(message)
+        payload = {
+            "type": "chat",
+            "user": self.username,
+            "content": text,
+            "ts": time.time()
+        }
         
-        msg = f"MSG:{self.username}:{message}"
+        if self._send_payload(payload):
+            self.add_message(self.username, text)
+
+    def _send_payload(self, payload: Dict[str, Any]) -> bool:
+        """Encode and send a payload, encrypting if necessary."""
         try:
-            self.socket.sendto(msg.encode(), (BROADCAST_ADDRESS, UDP_PORT))
-            # Also add to own message list
-            self.add_message(self.username, message if self.mode == 'open' else "[Encrypted]")
+            data = json.dumps(payload)
+            if self.mode == 'e2ee' and self.crypto_helper:
+                data = self.crypto_helper.encrypt(data)
+            
+            self.socket.sendto(data.encode(), (BROADCAST_ADDRESS, UDP_PORT))
+            return True
         except Exception as e:
-            self.add_system_message(f"{Colors.RED}Send error: {e}{Colors.RESET}")
-    
+            logger.error(f"Send error: {e}")
+            self.add_system_message(f"Send error: {e}")
+            return False
+
     def add_message(self, sender: str, content: str):
-        """Add a message to the message history."""
+        """Add a message to history."""
         with self.messages_lock:
-            timestamp = time.time()
-            self.messages.append((timestamp, sender, content))
-            # Keep only last 100 messages
+            self.messages.append({
+                "ts": time.time(),
+                "sender": sender,
+                "content": content
+            })
             if len(self.messages) > 100:
                 self.messages.pop(0)
     
     def add_system_message(self, content: str):
-        """Add a system message to the history."""
-        timestamp = time.time()
-        self.system_messages.append((timestamp, content))
-        # Keep only last 20 system messages
-        if len(self.system_messages) > 20:
-            self.system_messages.pop(0)
+        """Add a system message to history."""
+        with self.system_messages_lock:
+            self.system_messages.append({
+                "ts": time.time(),
+                "content": content
+            })
+            if len(self.system_messages) > 20:
+                self.system_messages.pop(0)
     
-    def get_messages(self) -> List[Tuple[float, str, str]]:
-        """Get all messages."""
+    def get_all_entries(self) -> List[Dict[str, Any]]:
+        """Return combined and sorted chat and system messages."""
+        combined = []
         with self.messages_lock:
-            return list(self.messages)
-    
-    def get_system_messages(self) -> List[Tuple[float, str]]:
-        """Get all system messages."""
-        return list(self.system_messages)
+            for m in self.messages:
+                combined.append({**m, "type": "chat"})
+        with self.system_messages_lock:
+            for m in self.system_messages:
+                combined.append({**m, "type": "sys"})
+        
+        combined.sort(key=lambda x: x["ts"])
+        return combined
 
 # ============================================================================
 # UI HANDLER
 # ============================================================================
 
 class UIHandler:
-    """Handles the terminal UI rendering."""
+    """Handles terminal UI rendering."""
     
     def __init__(self, network_handler: NetworkHandler, username: str, mode: str):
         self.network = network_handler
@@ -366,380 +433,191 @@ class UIHandler:
         self.input_buffer = ""
         self.running = True
         self.last_render_time = 0
-        self.render_interval = 0.1  # Minimum time between renders
+        self.render_interval = 0.05
     
     def clear_screen(self):
-        """Clear the terminal screen."""
-        # Use cls for Windows, clear for Unix
         os.system('cls' if os.name == 'nt' else 'clear')
     
-    def get_terminal_size(self) -> Tuple[int, int]:
-        """Get terminal dimensions."""
-        try:
-            columns, rows = os.get_terminal_size()
-        except OSError:
-            columns, rows = 80, 24
-        return columns, rows
-    
     def render(self):
-        """Render the complete UI."""
         current_time = time.time()
         if current_time - self.last_render_time < self.render_interval:
             return
         self.last_render_time = current_time
         
         self.clear_screen()
+        cols, rows = 80, 24
+        try:
+            cols, rows = os.get_terminal_size()
+        except OSError:
+            pass
+            
+        # Layout calculation
+        header_height = 16
+        footer_height = 4
+        chat_height = max(1, rows - header_height - footer_height)
         
-        cols, rows = self.get_terminal_size()
+        # Header
+        print(WIFI_LOGO.format(
+            cyan=Colors.CYAN, green=Colors.GREEN, yellow=Colors.YELLOW,
+            bright_green=Colors.BRIGHT_GREEN, reset=Colors.RESET
+        ))
         
-        # Calculate layout
-        header_height = 15  # Logo + banner
-        footer_height = 3   # Input area
-        chat_height = rows - header_height - footer_height
-        
-        # Render header (logo)
-        self._render_header(cols, header_height)
-        
-        # Render chat area
-        self._render_chat_area(cols, chat_height, header_height)
-        
-        # Render footer (input)
-        self._render_footer(cols, footer_height, rows - footer_height)
-    
-    def _render_header(self, cols: int, height: int):
-        """Render the header with logo and status."""
-        # Print logo
-        logo = WIFI_LOGO.format(
-            cyan=Colors.CYAN,
-            green=Colors.GREEN,
-            yellow=Colors.YELLOW,
-            bright_green=Colors.BRIGHT_GREEN,
-            reset=Colors.RESET
-        )
-        print(logo)
-        
-        # Print status banner
         encrypted_status = f"{Colors.GREEN}YES{Colors.RESET}" if self.mode == 'e2ee' else f"{Colors.YELLOW}NO{Colors.RESET}"
-        peer_count = self.network.peer_manager.get_peer_count()
-        
-        banner = BANNER.format(
-            dim=Colors.DIM,
-            bright_cyan=Colors.BRIGHT_CYAN,
-            reset=Colors.RESET,
+        print(BANNER.format(
+            dim=Colors.DIM, bright_cyan=Colors.BRIGHT_CYAN, reset=Colors.RESET,
             mode=f"{Colors.BRIGHT_CYAN}{self.mode.upper()}{Colors.RESET}",
             username=f"{Colors.BRIGHT_GREEN}{self.username}{Colors.RESET}",
             encrypted=encrypted_status
-        )
-        print(banner)
+        ))
         
-        # Print peer info
-        peers = self.network.get_active_peers()
-        if peers:
-            peer_names = ", ".join([p.username for p in peers])
-            print(f"{Colors.DIM}Active peers ({len(peers)}): {Colors.BRIGHT_CYAN}{peer_names}{Colors.RESET}")
-        else:
-            print(f"{Colors.DIM}No active peers detected yet...{Colors.RESET}")
-        
+        peers = self.network.peer_manager.get_active_peers()
+        peer_names = ", ".join([p.username for p in peers]) if peers else "Searching..."
+        print(f"{Colors.DIM}📡 Active: {Colors.BRIGHT_CYAN}{len(peers)}{Colors.RESET} | {Colors.DIM}{peer_names}{Colors.RESET}")
         print(f"{Colors.DIM}{'─' * min(cols, 60)}{Colors.RESET}")
-    
-    def _render_chat_area(self, cols: int, height: int, start_row: int):
-        """Render the chat message area."""
-        messages = self.network.get_messages()
-        system_messages = self.network.get_system_messages()
         
-        # Combine and sort all messages by timestamp
-        all_entries = []
-        for ts, sender, content in messages:
-            all_entries.append((ts, 'msg', sender, content))
-        for ts, content in system_messages:
-            all_entries.append((ts, 'sys', None, content))
+        # Chat
+        all_entries = self.network.get_all_entries()
+        display_entries = all_entries[-chat_height:]
         
-        all_entries.sort(key=lambda x: x[0])
-        
-        # Get the most recent messages that fit
-        display_messages = all_entries[-height:] if len(all_entries) > height else all_entries
-        
-        for entry in display_messages:
-            ts, msg_type, sender, content = entry
-            time_str = datetime.fromtimestamp(ts).strftime('%H:%M:%S')
-            
-            if msg_type == 'sys':
-                # System message
-                print(f"{Colors.DIM}[{time_str}] {content}{Colors.RESET}")
+        for entry in display_entries:
+            time_str = datetime.fromtimestamp(entry["ts"]).strftime('%H:%M:%S')
+            if entry["type"] == "sys":
+                print(f"{Colors.DIM}[{time_str}] {entry['content']}{Colors.RESET}")
             else:
-                # Chat message
-                if sender == self.username:
-                    # Own message - green
-                    print(f"{Colors.GREEN}[{time_str}] <{sender}> {content}{Colors.RESET}")
-                else:
-                    # Others' messages - cyan
-                    print(f"{Colors.CYAN}[{time_str}] <{sender}> {content}{Colors.RESET}")
+                color = Colors.BRIGHT_GREEN if entry["sender"] == self.username else Colors.BRIGHT_CYAN
+                print(f"{color}[{time_str}] <{entry['sender']}> {entry['content']}{Colors.RESET}")
         
-        # Fill remaining space if needed
-        remaining = height - len(display_messages)
-        for _ in range(remaining):
+        for _ in range(chat_height - len(display_entries)):
             print()
-    
-    def _render_footer(self, cols: int, height: int, start_row: int):
-        """Render the input footer."""
+            
+        # Footer
         print(f"{Colors.DIM}{'─' * min(cols, 60)}{Colors.RESET}")
-        
-        # Input prompt
-        prompt = f"{Colors.BRIGHT_GREEN}┌─[{self.username}@netmsg]{Colors.RESET}"
-        print(prompt)
-        
-        # Input field
-        input_line = f"{Colors.BRIGHT_GREEN}│{Colors.RESET} {Colors.WHITE}{self.input_buffer}{Colors.RESET}"
-        # Add cursor
-        if self.running:
-            input_line += f"{Colors.BLINK}█{Colors.RESET}"
-        print(input_line)
-        
-        # Bottom border
-        print(f"{Colors.BRIGHT_GREEN}└──>{Colors.RESET} ", end='')
-    
+        print(f"{Colors.BRIGHT_GREEN}┌─[{self.username}@netmsg]{Colors.RESET}")
+        cursor = f"{Colors.BLINK}█{Colors.RESET}" if self.running else ""
+        print(f"{Colors.BRIGHT_GREEN}│{Colors.RESET} {self.input_buffer}{cursor}")
+        print(f"{Colors.BRIGHT_GREEN}└──>{Colors.RESET} ", end='', flush=True)
+
     def handle_input(self, char: str):
-        """Handle a single character input."""
-        if char == '\r' or char == '\n':
-            # Enter pressed - send message
+        if char in ('\r', '\n'):
             if self.input_buffer.strip():
-                self.network.send_message(self.input_buffer)
+                self.network.send_chat_message(self.input_buffer)
                 self.input_buffer = ""
-            return True
-        elif char == '\x08' or char == '\x7f':
-            # Backspace
-            if self.input_buffer:
-                self.input_buffer = self.input_buffer[:-1]
+        elif char in ('\x08', '\x7f'):
+            self.input_buffer = self.input_buffer[:-1]
         elif char == '\x03':
-            # Ctrl+C
             self.running = False
             return False
-        elif char == '\x1b':
-            # Escape sequence (arrow keys, etc.) - ignore for now
-            pass
         elif len(char) == 1 and char.isprintable():
-            # Regular character
             self.input_buffer += char
-        
         return True
 
 # ============================================================================
-# SIMPLE INPUT HANDLER (Cross-platform)
+# INPUT HANDLER
 # ============================================================================
 
-def get_char_non_blocking():
-    """Get a single character without blocking (cross-platform)."""
-    if os.name == 'nt':
-        # Windows
-        try:
-            import msvcrt
-            if msvcrt.kbhit():
-                char = msvcrt.getwch()
-                # Handle escape sequences
-                if char == '\xe0' or char == '\x00':
-                    # Arrow key or special - read next char
-                    msvcrt.getwch()
-                    return ''
-                return char
-        except ImportError:
-            pass
-    else:
-        # Unix/Linux/Mac
-        import termios
-        import tty
-        fd = sys.stdin.fileno()
-        old_settings = termios.tcgetattr(fd)
-        try:
-            tty.setcbreak(fd)
-            if sys.stdin in select.select([sys.stdin], [], [], 0)[0]:
-                char = sys.stdin.read(1)
-                return char
-        except:
-            pass
-        finally:
-            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
-    
-    return None
-
-# Alternative simple input method using threading
 class InputHandler:
-    """Handles user input in a non-blocking way."""
-    
     def __init__(self, ui_handler: UIHandler):
         self.ui = ui_handler
         self.running = True
-        self.input_thread = None
-    
+        
     def start(self):
-        """Start the input handling thread."""
-        self.input_thread = threading.Thread(target=self._input_loop, daemon=True)
-        self.input_thread.start()
-    
+        threading.Thread(target=self._input_loop, daemon=True).start()
+        
     def _input_loop(self):
-        """Continuously handle user input."""
         if os.name == 'nt':
-            # Windows implementation
-            try:
-                import msvcrt
-                while self.running and self.ui.running:
+            import msvcrt
+            while self.running and self.ui.running:
+                try:
                     if msvcrt.kbhit():
                         char = msvcrt.getwch()
-                        if char == '\xe0' or char == '\x00':
-                            # Special key - consume next character
-                            msvcrt.getwch()
+                        if char in ('\xe0', '\x00'):
+                            # Special/Function keys - consume next character
+                            if msvcrt.kbhit():
+                                msvcrt.getwch()
                             continue
                         self.ui.handle_input(char)
-                    time.sleep(0.05)
-            except ImportError:
-                # Fallback for systems without msvcrt
-                self._unix_input_loop()
+                except Exception as e:
+                    logger.debug(f"Windows input error: {e}")
+                time.sleep(0.02)
         else:
-            # Unix implementation
-            self._unix_input_loop()
-    
-    def _unix_input_loop(self):
-        """Unix-style input loop using termios."""
-        import termios
-        import tty
-        import select
-        
-        fd = sys.stdin.fileno()
-        old_settings = termios.tcgetattr(fd)
-        
-        try:
-            tty.setcbreak(fd)
-            while self.running and self.ui.running:
-                if select.select([sys.stdin], [], [], 0.1)[0]:
-                    char = sys.stdin.read(1)
-                    if char:
-                        self.ui.handle_input(char)
-        except Exception as e:
-            print(f"{Colors.RED}Input error: {e}{Colors.RESET}")
-        finally:
-            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
-    
+            import termios, tty, select
+            fd = sys.stdin.fileno()
+            try:
+                old_settings = termios.tcgetattr(fd)
+            except termios.error:
+                # Not a terminal (e.g. running in some IDEs or non-interactive environments)
+                return
+
+            try:
+                tty.setcbreak(fd)
+                while self.running and self.ui.running:
+                    try:
+                        if select.select([sys.stdin], [], [], 0.1)[0]:
+                            char = sys.stdin.read(1)
+                            if char:
+                                self.ui.handle_input(char)
+                    except (IOError, select.error) as e:
+                        logger.debug(f"Unix input select error: {e}")
+                        time.sleep(0.1)
+            finally:
+                try:
+                    termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+                except termios.error:
+                    pass
+
     def stop(self):
-        """Stop the input handler."""
         self.running = False
 
 # ============================================================================
-# MAIN APPLICATION
+# MAIN
 # ============================================================================
 
-def print_banner():
-    """Print the application banner."""
-    print(WIFI_LOGO.format(
-        cyan=Colors.CYAN,
-        green=Colors.GREEN,
-        yellow=Colors.YELLOW,
-        bright_green=Colors.BRIGHT_GREEN,
-        reset=Colors.RESET
-    ))
-
-def get_user_input(prompt: str, default: str = None) -> str:
-    """Get user input with optional default value."""
-    if default:
-        full_prompt = f"{Colors.BRIGHT_CYAN}{prompt}{Colors.RESET} [{default}]: "
-    else:
-        full_prompt = f"{Colors.BRIGHT_CYAN}{prompt}{Colors.RESET}: "
-    
-    try:
-        value = input(full_prompt).strip()
-        return value if value else default
-    except (EOFError, KeyboardInterrupt):
-        print(f"\n{Colors.RED}Input cancelled.{Colors.RESET}")
-        sys.exit(0)
-
 def main():
-    """Main entry point for the application."""
-    # Check for cryptography library
     if not CRYPTO_AVAILABLE:
-        print(f"{Colors.YELLOW}Warning: cryptography library not installed.{Colors.RESET}")
-        print(f"{Colors.YELLOW}E2EE mode will not be available.{Colors.RESET}")
-        print(f"{Colors.DIM}Install with: pip install cryptography{Colors.RESET}\n")
+        print(f"{Colors.YELLOW}Warning: cryptography not installed. E2EE disabled.{Colors.RESET}")
+        time.sleep(1)
+
+    print(WIFI_LOGO.format(
+        cyan=Colors.CYAN, green=Colors.GREEN, yellow=Colors.YELLOW,
+        bright_green=Colors.BRIGHT_GREEN, reset=Colors.RESET
+    ))
     
-    print_banner()
-    
-    # Get username
     print(f"{Colors.BRIGHT_CYAN}=== SETUP ==={Colors.RESET}")
-    username = get_user_input("Enter your username", "Anonymous")
-    if not username:
-        username = "Anonymous"
+    username = input(f"{Colors.BRIGHT_CYAN}Username: {Colors.RESET}").strip() or "Anonymous"
+    username = ''.join(c for c in username if c.isalnum() or c in '_-')[:15]
     
-    # Validate username
-    username = ''.join(c for c in username if c.isalnum() or c in '_-')[:20]
-    if not username:
-        username = "Anonymous"
-    
-    # Choose mode
-    print(f"\n{Colors.BRIGHT_CYAN}Select mode:{Colors.RESET}")
-    print(f"  {Colors.GREEN}1{Colors.RESET}. Open Mode (plain text, visible to all)")
-    print(f"  {Colors.CYAN}2{Colors.RESET}. E2EE Mode (encrypted, requires shared passphrase)")
-    
-    if CRYPTO_AVAILABLE:
-        mode_choice = get_user_input("Choose mode", "1")
-    else:
-        print(f"{Colors.YELLOW}E2EE not available (cryptography not installed). Using Open Mode.{Colors.RESET}")
-        mode_choice = "1"
+    print(f"\n1. Open Mode\n2. E2EE Mode")
+    choice = input("Choice [1]: ").strip() or "1"
     
     mode = 'open'
-    crypto_helper = None
-    
-    if mode_choice == '2' and CRYPTO_AVAILABLE:
+    crypto = None
+    if choice == '2' and CRYPTO_AVAILABLE:
         mode = 'e2ee'
-        print(f"\n{Colors.BRIGHT_CYAN}=== E2EE SETUP ==={Colors.RESET}")
-        print(f"{Colors.DIM}All users must enter the SAME passphrase to communicate.{Colors.RESET}")
-        passphrase = get_user_input("Enter shared passphrase")
-        
-        if not passphrase:
-            print(f"{Colors.RED}Passphrase required for E2EE mode. Falling back to Open Mode.{Colors.RESET}")
-            mode = 'open'
+        passphrase = input("Passphrase: ")
+        if passphrase:
+            crypto = CryptoHelper(passphrase)
         else:
-            try:
-                crypto_helper = CryptoHelper(passphrase)
-                print(f"{Colors.GREEN}✓ Encryption initialized successfully{Colors.RESET}")
-            except Exception as e:
-                print(f"{Colors.RED}Failed to initialize encryption: {e}{Colors.RESET}")
-                print(f"{Colors.YELLOW}Falling back to Open Mode.{Colors.RESET}")
-                mode = 'open'
-    
-    print(f"\n{Colors.BRIGHT_GREEN}╔════════════════════════════════════════╗{Colors.RESET}")
-    print(f"{Colors.BRIGHT_GREEN}║{Colors.RESET}  {Colors.BRIGHT_CYAN}Starting NetMsg v1.0{Colors.RESET}              {Colors.BRIGHT_GREEN}║{Colors.RESET}")
-    print(f"{Colors.BRIGHT_GREEN}╚════════════════════════════════════════╝{Colors.RESET}")
-    print(f"\n{Colors.DIM}Press Ctrl+C to exit{Colors.RESET}\n")
-    time.sleep(1.5)
-    
-    # Initialize network handler
-    network = NetworkHandler(username, mode, crypto_helper)
-    network.start()
-    
-    # Initialize UI handler
+            mode = 'open'
+            print("No passphrase. Falling back to Open Mode.")
+
+    network = NetworkHandler(username, mode, crypto)
     ui = UIHandler(network, username, mode)
+    input_h = InputHandler(ui)
     
-    # Initialize input handler
-    input_handler = InputHandler(ui)
-    input_handler.start()
+    network.start()
+    input_h.start()
     
-    # Main loop
     try:
         while ui.running:
             ui.render()
-            time.sleep(0.1)
+            time.sleep(0.05)
     except KeyboardInterrupt:
         pass
     finally:
-        # Cleanup
         ui.running = False
-        input_handler.stop()
+        input_h.stop()
         network.stop()
-        
-        print(f"\n{Colors.BRIGHT_CYAN}Goodbye!{Colors.RESET}")
-        print(f"{Colors.DIM}Messages sent: {len(network.get_messages())}{Colors.RESET}")
-        print(f"{Colors.DIM}Session ended at {datetime.now().strftime('%H:%M:%S')}{Colors.RESET}\n")
+        print(f"\n{Colors.BRIGHT_CYAN}Goodbye!{Colors.RESET}\n")
 
 if __name__ == "__main__":
-    # Import select for Unix input handling
-    if os.name != 'nt':
-        import select
-    
     main()

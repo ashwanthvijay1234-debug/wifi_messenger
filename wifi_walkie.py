@@ -284,14 +284,22 @@ class WiFIMessenger:
             self.setup_crypto(pwd)
         
         self.init_socket()
+        if not self.running:
+            print(f"{Colors.TEXT_ERROR}Error: Could not initialize socket. Is another instance running?{Colors.RESET}")
+            return
+
         threading.Thread(target=self.receive_loop, daemon=True).start()
         try:
             self.input_loop()
-        except KeyboardInterrupt:
-            pass
+        except (KeyboardInterrupt, SystemExit):
+            self.running = False
         finally:
-            self.send_message("leave", "")
+            try:
+                self.send_message("leave", "")
+            except:
+                pass
             sys.stdout.write(Colors.SHOW_CURSOR + Colors.RESET)
+            print(f"\n{Colors.TEXT_CYAN}Goodbye!{Colors.RESET}\n")
 
 if __name__ == "__main__":
     WiFIMessenger().run()

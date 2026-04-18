@@ -1,17 +1,15 @@
 @echo off
-:: Enable UTF-8 encoding so the box drawing characters render correctly
+:: Enable UTF-8 encoding
 chcp 65001 >nul
 setlocal EnableDelayedExpansion
 
-:: ==========================================
-:: CONFIGURATION
-:: ==========================================
-set "APP_URL=https://raw.githubusercontent.com/ashwanthvijay1234-debug/wifi_walkie/main/wifi_walkie.py"
-set "APP_NAME=wifi_walkie.py"
+:: Ensure we are in a writable directory (User's home or temp)
+set "TARGET_DIR=%USERPROFILE%\WiFiWalkie"
+if not exist "%TARGET_DIR%" mkdir "%TARGET_DIR%"
+cd /d "%TARGET_DIR%"
 
-:: ==========================================
-:: HELPER FUNCTIONS FOR UI
-:: ==========================================
+set "APP_URL=https://raw.githubusercontent.com/ashwanthvijay1234-debug/wifi_walkie/main/netmsg.py"
+set "CLASSIC_URL=https://raw.githubusercontent.com/ashwanthvijay1234-debug/wifi_walkie/main/wifi_walkie.py"
 
 :DrawHeader
 cls
@@ -23,6 +21,8 @@ echo    │                 Powered by OpenClaw                │
 echo    │                                                    │
 echo    ╰────────────────────────────────────────────────────╯
 echo.
+echo    Installing to: %TARGET_DIR%
+echo.
 goto :eof
 
 :PrintStep
@@ -30,20 +30,6 @@ set "MSG=%~1"
 echo   [ * ] %MSG%
 timeout /t 1 /nobreak >nul
 goto :eof
-
-:PrintQuote
-set "Q_TEXT=%~1"
-set "Q_AUTH=%~2"
-echo.
-echo         " %Q_TEXT% "
-echo           -- %Q_AUTH%
-echo.
-timeout /t 2 /nobreak >nul
-goto :eof
-
-:: ==========================================
-:: MAIN INSTALLATION LOGIC
-:: ==========================================
 
 call :DrawHeader
 
@@ -58,10 +44,8 @@ if %errorlevel% neq 0 (
 )
 echo   [ + ] Python found!
 
-call :PrintQuote "Software is eating the world." "Marc Andreessen"
-
-:: Step 2: Install Cryptography
-call :PrintStep "Installing cryptography library..."
+:: Step 2: Install Dependencies
+call :PrintStep "Installing required libraries..."
 python -m pip install --upgrade pip --quiet
 pip install cryptography --quiet
 if %errorlevel% neq 0 (
@@ -70,27 +54,16 @@ if %errorlevel% neq 0 (
     echo   [ + ] Cryptography installed!
 )
 
-call :PrintQuote "First, solve the problem. Then, write the code." "John Johnson"
+:: Step 3: Download/Update Files
+call :PrintStep "Downloading latest version..."
+curl -sS -o "netmsg.py" "%APP_URL%"
+curl -sS -o "wifi_walkie.py" "%CLASSIC_URL%"
 
-:: Step 3: Download App
-call :PrintStep "Downloading Wi-Fi Walkie-Talkie..."
-curl -sS -o "%APP_NAME%" "%APP_URL%"
-if exist "%APP_NAME%" (
-    echo   [ + ] Download complete!
-) else (
-    echo   [ X ] ERROR: Failed to download the application.
+if not exist "netmsg.py" (
+    echo   [ X ] ERROR: Failed to download netmsg.py
     pause
     exit /b 1
 )
-
-call :PrintQuote "Simplicity is the soul of efficiency." "Austin Freeman"
-
-:: Step 4: Create Requirements
-call :PrintStep "Setting up requirements..."
-echo cryptography>requirements.txt
-echo   [ + ] Setup complete!
-
-call :PrintQuote "Make it work, make it right, make it fast." "Kent Beck"
 
 :: Final Screen
 cls
@@ -103,12 +76,20 @@ echo    │           You are ready to talk on Wi-Fi.          │
 echo    │                                                    │
 echo    ╰────────────────────────────────────────────────────╯
 echo.
-echo    [ ^> ] Launching Wi-Fi Walkie-Talkie...
+echo    [ 1 ] Launch NetMsg (New, Stable Protocol)
+echo    [ 2 ] Launch Wi-Fi Walkie (Classic UI)
 echo.
-timeout /t 2 /nobreak >nul
+set /p choice="Choice [1]: "
+if "%choice%"=="" set choice=1
 
-:: Launch the app
-python "%APP_NAME%"
+if "%choice%"=="1" (
+    echo   [ ^> ] Launching NetMsg...
+    timeout /t 1 /nobreak >nul
+    python netmsg.py
+) else (
+    echo   [ ^> ] Launching Wi-Fi Walkie Classic...
+    timeout /t 1 /nobreak >nul
+    python wifi_walkie.py
+)
 
-:: Pause if the app closes so the user can read any errors
 pause
