@@ -10,7 +10,15 @@ A friendly, retro-styled local network messaging app for Windows, Linux, and Mac
 - ⚡ **Zero Config**: No IP addresses to type. Just run and chat.
 - 👋 **Peer Discovery**: Automatically see who else is online.
 
-## 🚀 One-Line Install & Launch
+## 🚀 Getting Started (Windows Executable)
+
+For the simplest experience on Windows, download and run the `netmsg.exe` file. No installation or Python required!
+
+1.  **Download**: Get the latest `netmsg.exe` from the [releases page](https://github.com/ashwanthvijay1234-debug/wifi_walkie/releases) (Note: You may need to create a release with the .exe).
+2.  **Run**: Double-click `netmsg.exe`.
+3.  **Chat**: Follow the on-screen prompts for your username and chat mode.
+
+## 🚀 One-Line Install & Launch (Python Version)
 
 This single command installs dependencies, downloads the app, and launches it immediately!
 
@@ -18,12 +26,12 @@ This single command installs dependencies, downloads the app, and launches it im
 Copy and paste this into your terminal:
 
 ```powershell
-irm https://raw.githubusercontent.com/ashwanthvijay1234-debug/wifi_walkie/main/install.bat -OutFile $env:TEMP\w.bat; & $env:TEMP\w.bat; python wifi_walkie.py
+irm https://raw.githubusercontent.com/ashwanthvijay1234-debug/wifi_walkie/main/install.bat -OutFile $env:TEMP\install.bat; & $env:TEMP\install.bat
 ```
 
-For Windows CMD / Linux / Mac:
+### For Windows CMD / Linux / Mac:
 ```bash
-curl -sS https://raw.githubusercontent.com/ashwanthvijay1234-debug/wifi_walkie/main/install.bat -o /tmp/w.sh && chmod +x /tmp/w.sh && /tmp/w.sh && python3 wifi_walkie.py
+curl -sS -L https://raw.githubusercontent.com/ashwanthvijay1234-debug/wifi_walkie/main/install.sh -o /tmp/install.sh && chmod +x /tmp/install.sh && /tmp/install.sh
 ```
 
 This magical one-liner will:
@@ -31,18 +39,21 @@ This magical one-liner will:
 - 🔧 Verify pip package manager
 - 📦 Upgrade pip for best compatibility
 - 🔐 Install the cryptography library
-- 📥 Download the Wi-Fi Walkie-Talkie app
-- 📝 Create requirements.txt
+- 📥 Download the Wi-Fi Walkie-Talkie app files (`netmsg.py`, `wifi_walkie.py`)
 - 💡 Show inspiring tech quotes along the way!
 
-> 🔍 **Security Note**: This short URL redirects to our official [GitHub Gist installer script](https://gist.github.com/ashwanthvijay1234-debug/b3fb8fb03575d0fe6dd0f6ab9f8fc3d2). You can inspect the code there before running!
+> 🔍 **Security Note**: You can inspect the installer scripts (`install.bat` and `install.sh`) in this repository before running.
 
-## 🚀 Quick Start
+## 🚀 Quick Start (Python Version)
+
+*(If you used the one-line installer, dependencies are already installed!)*
 
 ### Step 1: Run the App
 
-*(If you used the installer, dependencies are already installed!)*
-
+```bash
+python netmsg.py
+```
+Or, for the classic UI:
 ```bash
 python wifi_walkie.py
 ```
@@ -51,8 +62,8 @@ python wifi_walkie.py
 
 1. Enter your nickname (something fun!)
 2. Choose your mode:
-   - **Public Mode (1)**: Everyone on Wi-Fi can see messages
-   - **Secret Mode (2)**: Share a secret word with friends for encrypted chat
+   - **Open Mode (1)**: Everyone on Wi-Fi can see messages
+   - **E2EE Mode (2)**: Share a secret word with friends for encrypted chat
 3. Start chatting! 💬
 
 ## 🎮 How It Works
@@ -63,7 +74,7 @@ python wifi_walkie.py
 - Broadcasts presence every 5 seconds
 - Peers timeout after 15 seconds of silence
 
-### Encryption (Secret Mode)
+### Encryption (E2EE Mode)
 - Uses **Fernet symmetric encryption** from the `cryptography` library
 - Key derivation with **PBKDF2HMAC** (100,000 iterations)
 - SHA-256 hashing for secure key generation
@@ -172,22 +183,27 @@ Type here > Hey everyone! 👋
 
 ### File Structure
 ```
-wifi_walkie.py      # Main application (single file!)
-requirements.txt    # Dependencies
-README.md          # This file
+netmsg.py           # Main application (new, stable protocol)
+wifi_walkie.py      # Classic UI application (legacy)
+install.bat         # Windows installer script
+install.sh          # Linux/macOS installer script
+requirements.txt    # Python dependencies
+README.md           # This file
 ```
 
-### Key Classes
-- `Colors`: ANSI color codes for friendly styling
+### Key Classes (in `netmsg.py`)
 - `CryptoHelper`: Encryption/decryption utilities
-- `NetworkHandler`: UDP broadcasting and peer management
-- `WalkieTalkieUI`: User interface and input handling
+- `PeerManager`: UDP peer discovery and management
+- `NetworkHandler`: Core network communication (UDP broadcasting)
+- `UIHandler`: User interface rendering
+- `InputHandler`: Cross-platform non-blocking input
 
 ### Customization Ideas
 - Change the ASCII logo in `WIFI_LOGO`
 - Adjust colors in the `Colors` class
-- Modify `PEER_TIMEOUT` in `NetworkHandler` for faster/slower peer detection
+- Modify `DISCOVERY_INTERVAL` or `PEER_TIMEOUT` for peer detection
 - Add custom emojis or status indicators
+- Implement new message types (e.g., file transfer)
 
 ## 📄 License
 
