@@ -17,7 +17,7 @@ echo.
 echo    ╭────────────────────────────────────────────────────╮
 echo    │                                                    │
 echo    │            WI-FI WALKIE-TALKIE INSTALLER           │
-echo    │                 Powered by OpenClaw                │
+echo    │                                                 
 echo    │                                                    │
 echo    ╰────────────────────────────────────────────────────╯
 echo.
